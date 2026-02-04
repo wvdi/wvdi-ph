@@ -274,14 +274,21 @@ export default async function handler(req, res) {
   // Message webhook (POST request from Facebook)
   if (req.method === 'POST') {
     const body = req.body;
+    
+    // Debug logging
+    console.log('=== MESSENGER WEBHOOK RECEIVED ===');
+    console.log('Body object:', body.object);
+    console.log('Full body:', JSON.stringify(body, null, 2));
 
     // Verify this is from a Page subscription
     if (body.object !== 'page') {
+      console.log('Not a page object, returning 404');
       return res.status(404).send('Not Found');
     }
 
     // Respond immediately to Facebook (they require <20s response)
     res.status(200).send('EVENT_RECEIVED');
+    console.log('Sent EVENT_RECEIVED response');
 
     // Process messages asynchronously
     try {
