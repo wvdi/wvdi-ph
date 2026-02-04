@@ -12,6 +12,16 @@ const VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || 'wvdi_messenger_verif
 const PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN;
 const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID || '1LjJLLHIzGl-s78keZwkGV20GUgaJgw8qKacNTo6UgVk';
 
+// Staff PSIDs (Page-Scoped IDs) - bot won't auto-reply to these
+// Add staff Facebook PSIDs here after identifying them
+const STAFF_PSIDS = new Set([
+  // Will be populated with staff PSIDs
+  // Format: '1234567890123456'
+]);
+
+// Conversations where staff has taken over (bot stays silent but logs)
+const staffTakeovers = new Map(); // recipientId -> { takenOverAt, staffPsid }
+
 // In-memory conversation storage (use Redis in production)
 const conversations = new Map();
 const CONVERSATION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
@@ -276,13 +286,67 @@ export default async function handler(req, res) {
     // Process messages asynchronously
     try {
       for (const entry of body.entry || []) {
+        const pageId = entry.id;
+        
         for (const event of entry.messaging || []) {
           const senderId = event.sender?.id;
+          const recipientId = event.recipient?.id;
           
-          // Skip if no sender or it's the page itself
-          if (!senderId || senderId === entry.id) continue;
+          // Skip if no sender
+          if (!senderId) continue;
 
-          // Handle message
+          // Detect if this is from the page (staff replying)
+          const isFromPage = senderId === pageId;
+          
+          // If staff is replying to a customer, mark conversation as taken over
+          if (isFromPage && recipientId) {
+            staffTakeovers.set(recipientId, {
+              takenOverAt: Date.now(),
+              staffPsid: senderId,
+            });
+            console.log(`Staff takeover: conversation with ${recipientId}`);
+            
+            // Still log the staff message in conversation history
+            const conversation = getConversation(recipientId);
+            if (event.message?.text) {
+              conversation.messages.push({
+                role: 'assistant', // Staff acts as assistant
+                content: `[STAFF]: ${event.message.text}`,
+              });
+            }
+            continue; // Don't process further
+          }
+
+          // Skip if sender is staff (they're initiating, not a customer)
+          if (STAFF_PSIDS.has(senderId)) {
+            console.log(`Skipping staff message from ${senderId}`);
+            continue;
+          }
+
+          // Check if this conversation was taken over by staff
+          const takeover = staffTakeovers.get(senderId);
+          if (takeover) {
+            // Staff took over within last 2 hours - don't auto-reply
+            const twoHours = 2 * 60 * 60 * 1000;
+            if (Date.now() - takeover.takenOverAt < twoHours) {
+              console.log(`Conversation ${senderId} handled by staff, logging only`);
+              
+              // Still log the customer message
+              if (event.message?.text) {
+                const conversation = getConversation(senderId);
+                conversation.messages.push({
+                  role: 'user',
+                  content: event.message.text,
+                });
+              }
+              continue; // Don't auto-reply
+            } else {
+              // Takeover expired, remove it
+              staffTakeovers.delete(senderId);
+            }
+          }
+
+          // Handle customer message
           if (event.message?.text) {
             const messageText = event.message.text;
             
