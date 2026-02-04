@@ -25,7 +25,7 @@ import WhyChooseUsSection from './components/sections/WhyChooseUsSection';
 
 // UI Components
 import MobileStickyCTA from './components/ui/MobileStickyCTA';
-// import DriveBotWidget from './DriveBotWidget'; // Replaced by Messenger
+import DriveBotWidget from './DriveBotWidget';
 import MessengerChat from './MessengerChat';
 
 // Config
@@ -83,7 +83,7 @@ function App() {
 
         <Footer />
         <MobileStickyCTA />
-        {/* DriveBotWidget replaced by Messenger */}
+        <DriveBotWidget />
         <MessengerChat />
       </div>
     </>
