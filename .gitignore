@@ -28,3 +28,4 @@ screenshots
 .env*.local
 .env.vercel
 .env.local
+.env.production

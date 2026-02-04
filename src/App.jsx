@@ -26,6 +26,7 @@ import WhyChooseUsSection from './components/sections/WhyChooseUsSection';
 // UI Components
 import MobileStickyCTA from './components/ui/MobileStickyCTA';
 import DriveBotWidget from './DriveBotWidget';
+import MessengerChat from './MessengerChat';
 
 // Config
 import config from './data/config.json';
@@ -83,6 +84,7 @@ function App() {
         <Footer />
         <MobileStickyCTA />
         <DriveBotWidget />
+        <MessengerChat />
       </div>
     </>
   );
