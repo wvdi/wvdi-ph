@@ -295,11 +295,15 @@ export default async function handler(req, res) {
           // Skip if no sender
           if (!senderId) continue;
 
-          // Detect if this is from the page (staff replying)
+          // Detect if this is from the page (staff or bot replying)
           const isFromPage = senderId === pageId;
           
-          // If staff is replying to a customer, mark conversation as taken over
-          if (isFromPage && recipientId) {
+          // Check if this is an echo of a message we sent via API (bot message)
+          // Facebook sends is_echo: true for messages sent via the Send API
+          const isEcho = event.message?.is_echo === true;
+          
+          // If page is sending AND it's NOT an echo, it's a human staff member
+          if (isFromPage && recipientId && !isEcho) {
             staffTakeovers.set(recipientId, {
               takenOverAt: Date.now(),
               staffPsid: senderId,
@@ -315,6 +319,11 @@ export default async function handler(req, res) {
               });
             }
             continue; // Don't process further
+          }
+          
+          // Skip echo messages (our own bot responses)
+          if (isEcho) {
+            continue;
           }
 
           // Skip if sender is staff (they're initiating, not a customer)
