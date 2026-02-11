@@ -286,11 +286,7 @@ export default async function handler(req, res) {
       return res.status(404).send('Not Found');
     }
 
-    // Respond immediately to Facebook (they require <20s response)
-    res.status(200).send('EVENT_RECEIVED');
-    console.log('Sent EVENT_RECEIVED response');
-
-    // Process messages asynchronously
+    // Process messages BEFORE responding (Vercel kills function after res.send)
     try {
       for (const entry of body.entry || []) {
         const pageId = entry.id;
@@ -365,15 +361,18 @@ export default async function handler(req, res) {
           // Handle customer message
           if (event.message?.text) {
             const messageText = event.message.text;
+            console.log(`Processing message from ${senderId}: ${messageText}`);
             
             // Send typing indicator
             await sendTypingIndicator(senderId, 'typing_on');
 
             // Process and respond
             const response = await processMessage(senderId, messageText);
+            console.log(`AI response: ${response.substring(0, 100)}...`);
             
             // Send response
-            await sendMessengerMessage(senderId, response);
+            const sent = await sendMessengerMessage(senderId, response);
+            console.log(`Message sent: ${sent}`);
             
             // Turn off typing indicator
             await sendTypingIndicator(senderId, 'typing_off');
@@ -390,7 +389,8 @@ export default async function handler(req, res) {
       console.error('Error processing Messenger webhook:', error);
     }
 
-    return;
+    // Respond to Facebook AFTER processing (within 20s limit)
+    return res.status(200).send('EVENT_RECEIVED');
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

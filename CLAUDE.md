@@ -166,5 +166,33 @@ npm run build
 
 **For Developers**: Always test locally before deploying. The website serves real customers, so ensure all features work properly before going live.
 
-**Last Updated**: December 2024
+## Agent Team Guidelines
+
+### Code Style
+- React functional components with hooks
+- JSX files with `.jsx` extension
+- Data-driven: content in `src/data/*.json`, components render dynamically
+- Tailwind CSS for styling (via `index.css` + component inline styles)
+- Lazy loading for heavy components (`React.lazy` + `Suspense`)
+- Mobile-first responsive design
+
+### Before Making Changes
+1. Run `npm run build` to verify current state compiles
+2. Check `git status` for uncommitted work
+3. Test locally with `npm run dev` after changes
+
+### Commit Convention
+- `feat:` new features
+- `fix:` bug fixes
+- `style:` UI/CSS changes
+- `refactor:` code restructuring
+- `docs:` documentation updates
+
+### Key Architecture Decisions
+- Single-page app (no router) — all sections rendered in `App.jsx`
+- Static data in JSON files — no backend/CMS yet
+- GitHub Pages deployment — static hosting only
+- OpenAI dependency exists but chatbot is disabled (incomplete)
+
+**Last Updated**: February 2026
 **Status**: Production Ready ✅
