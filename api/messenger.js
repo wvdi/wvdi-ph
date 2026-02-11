@@ -431,12 +431,11 @@ export default async function handler(req, res) {
 
           // Handle quick reply responses (phone/email from native buttons)
           if (event.message?.quick_reply) {
-            const qrPayload = event.message.quick_reply.payload;
             const conversation = await getConversation(senderId);
+            const text = event.message.text || event.message.quick_reply.payload || '';
             
             // Check if this is a phone number shared via quick reply
-            if (qrPayload && event.message.text) {
-              const text = event.message.text;
+            if (text) {
               // Phone numbers from user_phone_number quick reply
               if (text.match(/^\+?\d[\d\s\-()]{6,}$/)) {
                 conversation.lead.phones = [...new Set([...(conversation.lead.phones || []), text])];
