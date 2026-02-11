@@ -6,6 +6,7 @@
 
 import { getProvider } from './providers/index.js';
 import { generateSystemPrompt } from './lib/knowledge.js';
+import { loadConversation, saveConversation } from './lib/conversations-sheet.js';
 
 // Verify token for webhook setup (set in Vercel env vars)
 const VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || 'wvdi_messenger_verify_2024';
@@ -22,48 +23,46 @@ const STAFF_PSIDS = new Set([
 // Conversations where staff has taken over (bot stays silent but logs)
 const staffTakeovers = new Map(); // recipientId -> { takenOverAt, staffPsid }
 
-// In-memory conversation storage (use Redis in production)
-const conversations = new Map();
-const CONVERSATION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+// In-memory cache (backed by Google Sheets for persistence)
+const conversationCache = new Map();
 
 /**
- * Get or create conversation context
+ * Get or create conversation context (loads from Google Sheets if not cached)
  */
-function getConversation(senderId) {
-  if (!conversations.has(senderId)) {
-    conversations.set(senderId, {
-      messages: [],
-      lead: {
-        phones: [],
-        emails: [],
-        name: null,
-        services: [],
-        preferredBranch: null,
-        needsDescription: null,
-      },
-      createdAt: Date.now(),
-      lastActivity: Date.now(),
-    });
+async function getConversation(senderId) {
+  if (conversationCache.has(senderId)) {
+    const conv = conversationCache.get(senderId);
+    conv.lastActivity = Date.now();
+    return conv;
   }
-  
-  const conv = conversations.get(senderId);
-  conv.lastActivity = Date.now();
+
+  // Try loading from Google Sheets
+  const stored = await loadConversation(senderId);
+  if (stored) {
+    stored.lastActivity = Date.now();
+    stored.messageCount = (stored.messageCount || 0);
+    conversationCache.set(senderId, stored);
+    return stored;
+  }
+
+  // New conversation
+  const conv = {
+    messages: [],
+    lead: {
+      phones: [],
+      emails: [],
+      name: null,
+      services: [],
+      preferredBranch: null,
+      needsDescription: null,
+    },
+    messageCount: 0,
+    lastActivity: Date.now(),
+    rowNumber: null,
+  };
+  conversationCache.set(senderId, conv);
   return conv;
 }
-
-/**
- * Cleanup old conversations
- */
-function cleanupConversations() {
-  const now = Date.now();
-  for (const [id, conv] of conversations.entries()) {
-    if (now - conv.lastActivity > CONVERSATION_TIMEOUT) {
-      conversations.delete(id);
-    }
-  }
-}
-
-setInterval(cleanupConversations, 10 * 60 * 1000);
 
 /**
  * Send message via Messenger API
@@ -138,6 +137,33 @@ async function sendTypingIndicator(recipientId, action = 'typing_on') {
 }
 
 /**
+ * Send quick reply buttons for phone/email
+ */
+async function sendQuickReplyButtons(recipientId) {
+  if (!PAGE_ACCESS_TOKEN) return;
+  const url = `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: recipientId },
+        messaging_type: 'RESPONSE',
+        message: {
+          text: 'To help you faster, you can share your contact info below:',
+          quick_replies: [
+            { content_type: 'user_phone_number' },
+            { content_type: 'user_email' },
+          ],
+        },
+      }),
+    });
+  } catch (error) {
+    console.error('Failed to send quick reply buttons:', error);
+  }
+}
+
+/**
  * Get user profile from Facebook
  */
 async function getUserProfile(userId) {
@@ -161,29 +187,45 @@ async function getUserProfile(userId) {
  * Process incoming message and generate AI response
  */
 async function processMessage(senderId, messageText) {
-  const conversation = getConversation(senderId);
+  const conversation = await getConversation(senderId);
   
   // Add user message to history
   conversation.messages.push({
     role: 'user',
     content: messageText,
   });
+  conversation.messageCount = (conversation.messageCount || 0) + 1;
 
   // Keep only last 20 messages for context
   if (conversation.messages.length > 20) {
     conversation.messages = conversation.messages.slice(-20);
   }
 
-  // Get user profile for personalization (first message only)
-  if (conversation.messages.length === 1) {
+  // Always ensure we have the user profile
+  if (!conversation.lead.name) {
     const profile = await getUserProfile(senderId);
     if (profile?.first_name) {
       conversation.lead.name = profile.name || profile.first_name;
     }
   }
 
-  // Generate system prompt
-  const systemPrompt = generateSystemPrompt('en');
+  // Generate system prompt with injected user context
+  let systemPrompt = generateSystemPrompt('en');
+  
+  // Inject known user info so AI doesn't ask for it
+  const contextLines = [];
+  if (conversation.lead.name) {
+    contextLines.push(`The customer's name is ${conversation.lead.name}. Do not ask for their name.`);
+  }
+  if (conversation.lead.phones?.length > 0) {
+    contextLines.push(`The customer's phone is ${conversation.lead.phones.join(', ')}. Do not ask for their phone number.`);
+  }
+  if (conversation.lead.emails?.length > 0) {
+    contextLines.push(`The customer's email is ${conversation.lead.emails.join(', ')}. Do not ask for their email.`);
+  }
+  if (contextLines.length > 0) {
+    systemPrompt += '\n\nKNOWN CUSTOMER INFO:\n' + contextLines.join('\n') + '\nDo not ask for information you already have.';
+  }
 
   // Get AI response
   const provider = getProvider();
@@ -254,11 +296,18 @@ async function processMessage(senderId, messageText) {
       content: responseText,
     });
 
-    return responseText;
+    // Persist conversation to Google Sheets
+    try {
+      await saveConversation(senderId, conversation);
+    } catch (err) {
+      console.error('Failed to persist conversation:', err);
+    }
+
+    return { text: responseText, isFirstResponse: conversation.messageCount === 1 };
 
   } catch (error) {
     console.error('AI processing error:', error);
-    return "I apologize, but I'm having trouble processing your request right now. Please try again or contact us directly at 0917 810 0009.";
+    return { text: "I apologize, but I'm having trouble processing your request right now. Please try again or contact us directly at 0917 810 0009.", isFirstResponse: false };
   }
 }
 
@@ -333,7 +382,7 @@ export default async function handler(req, res) {
             console.log(`Staff takeover: conversation with ${recipientId}`);
             
             // Still log the staff message in conversation history
-            const conversation = getConversation(recipientId);
+            const conversation = await getConversation(recipientId);
             if (event.message?.text) {
               conversation.messages.push({
                 role: 'assistant', // Staff acts as assistant
@@ -364,7 +413,7 @@ export default async function handler(req, res) {
               
               // Still log the customer message
               if (event.message?.text) {
-                const conversation = getConversation(senderId);
+                const conversation = await getConversation(senderId);
                 conversation.messages.push({
                   role: 'user',
                   content: event.message.text,
@@ -377,8 +426,39 @@ export default async function handler(req, res) {
             }
           }
 
+          // Handle quick reply responses (phone/email from native buttons)
+          if (event.message?.quick_reply) {
+            const qrPayload = event.message.quick_reply.payload;
+            const conversation = await getConversation(senderId);
+            
+            // Check if this is a phone number shared via quick reply
+            if (qrPayload && event.message.text) {
+              const text = event.message.text;
+              // Phone numbers from user_phone_number quick reply
+              if (text.match(/^\+?\d[\d\s\-()]{6,}$/)) {
+                conversation.lead.phones = [...new Set([...(conversation.lead.phones || []), text])];
+                console.log(`Captured phone from quick reply: ${text}`);
+                await sendMessengerMessage(senderId, `Thanks! I've noted your phone number: ${text}`);
+                // Send email quick reply if we don't have it
+                if (!conversation.lead.emails?.length) {
+                  await sendQuickReplyButtons(senderId);
+                }
+                await saveConversation(senderId, conversation);
+                continue;
+              }
+              // Email from user_email quick reply
+              if (text.match(/@/)) {
+                conversation.lead.emails = [...new Set([...(conversation.lead.emails || []), text])];
+                console.log(`Captured email from quick reply: ${text}`);
+                await sendMessengerMessage(senderId, `Thanks! I've noted your email: ${text}`);
+                await saveConversation(senderId, conversation);
+                continue;
+              }
+            }
+          }
+
           // Handle customer message
-          if (event.message?.text) {
+          if (event.message?.text && !event.message?.quick_reply) {
             const messageText = event.message.text;
             console.log(`Processing message from ${senderId}: ${messageText}`);
             
@@ -386,12 +466,17 @@ export default async function handler(req, res) {
             await sendTypingIndicator(senderId, 'typing_on');
 
             // Process and respond
-            const response = await processMessage(senderId, messageText);
-            console.log(`AI response: ${response.substring(0, 100)}...`);
+            const result = await processMessage(senderId, messageText);
+            console.log(`AI response: ${result.text.substring(0, 100)}...`);
             
             // Send response
-            const sent = await sendMessengerMessage(senderId, response);
+            const sent = await sendMessengerMessage(senderId, result.text);
             console.log(`Message sent: ${sent}`);
+            
+            // After first response, send quick reply buttons for phone/email
+            if (result.isFirstResponse) {
+              await sendQuickReplyButtons(senderId);
+            }
             
             // Turn off typing indicator
             await sendTypingIndicator(senderId, 'typing_off');
@@ -399,7 +484,6 @@ export default async function handler(req, res) {
 
           // Handle postback (button clicks)
           if (event.postback?.payload) {
-            // Could handle quick reply buttons here
             console.log('Postback received:', event.postback.payload);
           }
         }
