@@ -438,11 +438,7 @@ export default async function handler(req, res) {
               if (text.match(/^\+?\d[\d\s\-()]{6,}$/)) {
                 conversation.lead.phones = [...new Set([...(conversation.lead.phones || []), text])];
                 console.log(`Captured phone from quick reply: ${text}`);
-                await sendMessengerMessage(senderId, `Thanks! I've noted your phone number: ${text}`);
-                // Send email quick reply if we don't have it
-                if (!conversation.lead.emails?.length) {
-                  await sendQuickReplyButtons(senderId);
-                }
+                await sendMessengerMessage(senderId, `Thanks! I've noted your phone number: ${text}. How can I help you today?`);
                 await saveConversation(senderId, conversation);
                 continue;
               }
@@ -473,8 +469,11 @@ export default async function handler(req, res) {
             const sent = await sendMessengerMessage(senderId, result.text);
             console.log(`Message sent: ${sent}`);
             
-            // After first response, send quick reply buttons for phone/email
-            if (result.isFirstResponse) {
+            // Send quick reply buttons only if we're missing phone or email
+            const conv = getConversation(senderId);
+            const hasPhone = conv.lead?.phones?.length > 0;
+            const hasEmail = conv.lead?.emails?.length > 0;
+            if (result.isFirstResponse && !hasPhone && !hasEmail) {
               await sendQuickReplyButtons(senderId);
             }
             
