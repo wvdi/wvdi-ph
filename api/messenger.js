@@ -215,7 +215,8 @@ async function processMessage(senderId, messageText) {
   // Inject known user info so AI doesn't ask for it
   const contextLines = [];
   if (conversation.lead.name) {
-    contextLines.push(`The customer's name is ${conversation.lead.name}. Do not ask for their name.`);
+    const firstName = conversation.lead.name.split(' ')[0];
+    contextLines.push(`The customer's first name is ${firstName}. Address them by first name only. Do not ask for their name.`);
   }
   if (conversation.lead.phones?.length > 0) {
     contextLines.push(`The customer's phone is ${conversation.lead.phones.join(', ')}. Do not ask for their phone number.`);
