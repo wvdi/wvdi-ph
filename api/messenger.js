@@ -225,7 +225,7 @@ async function processMessage(senderId, messageText) {
     contextLines.push(`The customer's email is ${conversation.lead.emails.join(', ')}. Do not ask for their email.`);
   }
   if (contextLines.length > 0) {
-    systemPrompt += '\n\nKNOWN CUSTOMER INFO:\n' + contextLines.join('\n') + '\nDo not ask for information you already have.';
+    systemPrompt += '\n\nKNOWN CUSTOMER INFO:\n' + contextLines.join('\n') + '\nIMPORTANT: NEVER ask the customer for information listed above. You already have it. Do not ask for their name, phone, or email if already known. Instead, use the information to assist them directly.';
   }
 
   // Get AI response
