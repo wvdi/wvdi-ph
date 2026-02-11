@@ -198,6 +198,7 @@ async function processMessage(senderId, messageText) {
     });
 
     const rawResponse = typeof aiResponse === 'string' ? aiResponse : aiResponse.content;
+    console.log('Raw AI response (first 200):', rawResponse.substring(0, 200));
 
     // Parse JSON response
     let responseText = rawResponse;
@@ -210,7 +211,8 @@ async function processMessage(senderId, messageText) {
       }
 
       const parsed = JSON.parse(jsonStr);
-      responseText = parsed.response || rawResponse;
+      responseText = parsed.response || parsed.text || parsed.message || rawResponse;
+      console.log('Parsed response (first 200):', responseText.substring(0, 200));
       aiExtractedLead = parsed.extractedLead || null;
 
       // Merge extracted lead data
@@ -236,7 +238,14 @@ async function processMessage(senderId, messageText) {
       }
     } catch (parseError) {
       console.warn('Failed to parse AI JSON response:', parseError.message);
-      responseText = rawResponse;
+      // If JSON parsing fails, try to extract just the text content
+      // Remove any JSON wrapper if partially formed
+      responseText = rawResponse
+        .replace(/^\s*\{\s*"response"\s*:\s*"/, '')
+        .replace(/"\s*,?\s*"extractedLead"[\s\S]*$/, '')
+        .replace(/"\s*\}\s*$/, '')
+        .replace(/\\n/g, '\n')
+        .replace(/\\"/g, '"');
     }
 
     // Add assistant message to history
