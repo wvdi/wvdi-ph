@@ -76,6 +76,16 @@ async function sendMessengerMessage(recipientId, text) {
 
   const url = `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
   
+  // Strip markdown formatting (Messenger doesn't support it)
+  text = text
+    .replace(/\*\*(.+?)\*\*/g, '$1')  // **bold** -> bold
+    .replace(/\*(.+?)\*/g, '$1')       // *italic* -> italic
+    .replace(/__(.+?)__/g, '$1')       // __bold__ -> bold
+    .replace(/_(.+?)_/g, '$1')         // _italic_ -> italic
+    .replace(/`(.+?)`/g, '$1')         // `code` -> code
+    .replace(/#{1,6}\s+/g, '')         // ### headers -> plain
+    .replace(/\[(.+?)\]\((.+?)\)/g, '$1: $2'); // [link](url) -> link: url
+  
   // Split long messages (Messenger limit is ~2000 chars)
   const chunks = text.match(/.{1,1900}/gs) || [text];
   
