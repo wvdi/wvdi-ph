@@ -214,6 +214,7 @@ async function processMessage(senderId, messageText) {
   let systemPrompt = generateSystemPrompt('en');
   
   // Inject known user info so AI doesn't ask for it
+  console.log(`Lead data for ${senderId}:`, JSON.stringify(conversation.lead));
   const contextLines = [];
   if (conversation.lead.name) {
     const firstName = conversation.lead.name.split(' ')[0];
