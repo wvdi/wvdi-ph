@@ -122,8 +122,9 @@ export default async function handler(req, res) {
     let aiExtractedLead = null;
 
     try {
+      // Strip <think>...</think> reasoning tags (MiniMax M2.7 chain-of-thought)
+      let jsonStr = rawResponse.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
       // Strip markdown code fences if present (```json ... ```)
-      let jsonStr = rawResponse.trim();
       if (jsonStr.startsWith('```')) {
         jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
       }
