@@ -6,17 +6,17 @@
 
 import { createOllamaProvider } from './ollama.js';
 import { createGeminiProvider } from './gemini.js';
+import { createMiniMaxProvider } from './minimax.js';
 
 // Provider registry
 const providers = {
+  minimax: createMiniMaxProvider,
   gemini: createGeminiProvider,
   ollama: createOllamaProvider,
-  // Future providers:
-  // openai: createOpenAIProvider,
 };
 
-// Default priority order (cloud first, local fallback)
-const DEFAULT_PRIORITY = 'gemini,ollama';
+// Default priority order (MiniMax first, Gemini fallback)
+const DEFAULT_PRIORITY = 'minimax,gemini';
 
 /**
  * Get priority order from env or default
