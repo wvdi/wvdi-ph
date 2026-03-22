@@ -1,307 +1,17 @@
 /**
- * Lead Capture API - Google Sheets Integration
- * Uses upsert logic: updates existing row if threadId exists, otherwise appends new row
- * Updated: Philippine timezone (Asia/Manila) for timestamps
- * Version: 2.0.0 - Thread ID fix
+ * Lead Capture API - Posts to WVDI Admin Supabase backend
+ * Replaces Google Sheets integration
+ * Version: 3.0.0
  */
 
-const API_VERSION = '2.0.0';
-
-// Google Sheets configuration
-const SHEETS_ID = process.env.GOOGLE_SHEETS_ID || '1LjJLLHIzGl-s78keZwkGV20GUgaJgw8qKacNTo6UgVk';
-const SHEET_NAME = process.env.GOOGLE_SHEET_NAME || 'Sheet1';
-
-// Column headers for the spreadsheet (8 columns: A-H)
-const HEADERS = [
-  'Thread ID',
-  'Timestamp',
-  'Name',
-  'Email',
-  'Phone',
-  'Services',
-  'Summary',
-  'Conversation'
-];
-
-/**
- * Get Google API access token using service account
- */
-async function getAccessToken() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-  if (!email || !privateKey) {
-    throw new Error('Google service account credentials not configured');
-  }
-
-  // Create JWT for service account authentication
-  const now = Math.floor(Date.now() / 1000);
-  const header = { alg: 'RS256', typ: 'JWT' };
-  const payload = {
-    iss: email,
-    scope: 'https://www.googleapis.com/auth/spreadsheets',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  };
-
-  // Base64URL encode
-  const base64url = (obj) => {
-    const json = JSON.stringify(obj);
-    const base64 = Buffer.from(json).toString('base64');
-    return base64.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  };
-
-  const signInput = `${base64url(header)}.${base64url(payload)}`;
-
-  // Sign with private key
-  const crypto = await import('crypto');
-  const sign = crypto.createSign('RSA-SHA256');
-  sign.update(signInput);
-  const signature = sign.sign(privateKey, 'base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-
-  const jwt = `${signInput}.${signature}`;
-
-  // Exchange JWT for access token
-  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
-  });
-
-  if (!tokenResponse.ok) {
-    const errorText = await tokenResponse.text();
-    throw new Error(`Failed to get access token: ${errorText}`);
-  }
-
-  const tokenData = await tokenResponse.json();
-  return tokenData.access_token;
-}
-
-/**
- * Check if headers exist and add them if not
- * If data exists without headers, insert a new row at the top
- */
-async function ensureHeaders(accessToken) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_ID}/values/${SHEET_NAME}!A1:H1`;
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to read headers: ${errorText}`);
-  }
-
-  const data = await response.json();
-  const existingHeaders = data.values?.[0] || [];
-
-  // Check if headers already exist (first cell should be "Thread ID")
-  if (existingHeaders[0] === 'Thread ID') {
-    return; // Headers already exist
-  }
-
-  // If there's existing data (not headers), insert a new row at top first
-  if (existingHeaders.length > 0 && existingHeaders[0]) {
-    console.log('Existing data found, inserting new row for headers');
-
-    // Insert a new row at position 0 (top)
-    const insertUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_ID}:batchUpdate`;
-    const insertResponse = await fetch(insertUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        requests: [{
-          insertDimension: {
-            range: {
-              sheetId: 0, // First sheet
-              dimension: 'ROWS',
-              startIndex: 0,
-              endIndex: 1
-            },
-            inheritFromBefore: false
-          }
-        }]
-      }),
-    });
-
-    if (!insertResponse.ok) {
-      const errorText = await insertResponse.text();
-      console.error('Failed to insert row:', errorText);
-      // Continue anyway - we'll try to write headers
-    }
-  }
-
-  // Add headers to row 1
-  const headerUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_ID}/values/${SHEET_NAME}!A1:H1?valueInputOption=USER_ENTERED`;
-
-  const headerResponse = await fetch(headerUrl, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ values: [HEADERS] }),
-  });
-
-  if (!headerResponse.ok) {
-    const errorText = await headerResponse.text();
-    throw new Error(`Failed to add headers: ${errorText}`);
-  }
-
-  console.log('Headers added to spreadsheet');
-}
-
-/**
- * Find row number by threadId (Column A)
- * Returns row number (1-indexed) or null if not found
- * Skips row 1 (headers)
- */
-async function findRowByThreadId(accessToken, threadId) {
-  // Get all values from column A (thread IDs)
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_ID}/values/${SHEET_NAME}!A:A`;
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to read sheet: ${errorText}`);
-  }
-
-  const data = await response.json();
-  const values = data.values || [];
-
-  // Find the row with matching threadId (skip row 0 which is headers)
-  for (let i = 1; i < values.length; i++) {
-    if (values[i][0] === threadId) {
-      return i + 1; // Row numbers are 1-indexed
-    }
-  }
-
-  return null;
-}
-
-/**
- * Update existing row in Google Sheets
- * Columns: Thread ID | Timestamp | Name | Email | Phone | Services | Summary | Conversation
- */
-async function updateRow(accessToken, rowNumber, leadData) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_ID}/values/${SHEET_NAME}!A${rowNumber}:H${rowNumber}?valueInputOption=USER_ENTERED`;
-
-  const values = [[
-    leadData.threadId || '',
-    leadData.timestamp || '',
-    leadData.name || '',
-    leadData.email || '',
-    leadData.phone || '',
-    leadData.services || '',
-    leadData.summary || '',
-    leadData.conversation || '',
-  ]];
-
-  const response = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ values }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to update row: ${errorText}`);
-  }
-
-  return await response.json();
-}
-
-/**
- * Append new row to Google Sheets
- * Columns: Thread ID | Timestamp | Name | Email | Phone | Services | Summary | Conversation
- */
-async function appendRow(accessToken, leadData) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_ID}/values/${SHEET_NAME}!A:H:append?valueInputOption=USER_ENTERED`;
-
-  const values = [[
-    leadData.threadId || '',
-    leadData.timestamp || '',
-    leadData.name || '',
-    leadData.email || '',
-    leadData.phone || '',
-    leadData.services || '',
-    leadData.summary || '',
-    leadData.conversation || '',
-  ]];
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ values }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to append to sheet: ${errorText}`);
-  }
-
-  return await response.json();
-}
-
-/**
- * Upsert lead data to Google Sheets
- * Updates existing row if threadId found, otherwise appends new row
- * REQUIRES valid threadId - will not save without it
- */
-async function upsertToSheet(leadData) {
-  // Double-check threadId exists before any write operation
-  if (!leadData.threadId) {
-    console.error('upsertToSheet called without threadId - aborting');
-    throw new Error('Thread ID is required for saving lead data');
-  }
-
-  const accessToken = await getAccessToken();
-
-  // Ensure headers exist in row 1
-  await ensureHeaders(accessToken);
-
-  // Find existing row by threadId
-  const existingRow = await findRowByThreadId(accessToken, leadData.threadId);
-
-  if (existingRow) {
-    // Update existing row
-    console.log(`Updating existing row ${existingRow} for thread ${leadData.threadId}`);
-    return await updateRow(accessToken, existingRow, leadData);
-  } else {
-    // Append new row
-    console.log(`Appending new row for thread ${leadData.threadId}`);
-    return await appendRow(accessToken, leadData);
-  }
-}
+const API_VERSION = '3.0.0';
+const ADMIN_API_URL = process.env.WVDI_ADMIN_API_URL || 'https://wvdi-admin.vercel.app/api/leads';
+const ADMIN_API_KEY = process.env.CHATBOT_API_KEY;
 
 /**
  * API Handler
  */
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -322,7 +32,6 @@ export default async function handler(req, res) {
   try {
     const { sessionId, lead, conversationSummary, fullConversation } = req.body;
 
-    // Debug logging
     console.log('Leads API received:', {
       sessionId: sessionId || 'MISSING',
       hasLead: !!lead,
@@ -334,63 +43,87 @@ export default async function handler(req, res) {
     }
 
     if (!sessionId) {
-      console.log('ERROR: sessionId is missing from request');
       return res.status(400).json({ error: 'Thread ID is required' });
     }
 
-    // Format lead data for Google Sheets
-    // Use Philippine timezone (Asia/Manila) for timestamp
-    const philippineTimestamp = new Date().toLocaleString('en-PH', {
-      timeZone: 'Asia/Manila',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    });
+    const name = lead.name || '';
+    const email = Array.isArray(lead.emails) ? lead.emails[0] : (lead.email || '');
+    const phone = Array.isArray(lead.phones) ? lead.phones[0] : (lead.phone || '');
+    const services = Array.isArray(lead.services) ? lead.services.join(', ') : (lead.services || '');
+    const summary = lead.needsDescription || '';
+    const conversation = (fullConversation || lead.fullConversation || conversationSummary || '').substring(0, 50000);
 
-    const leadData = {
-      threadId: sessionId, // sessionId from frontend becomes threadId in sheets
-      timestamp: philippineTimestamp,
-      name: lead.name || '',
-      email: Array.isArray(lead.emails) ? lead.emails.join(', ') : (lead.email || ''),
-      phone: Array.isArray(lead.phones) ? lead.phones.join(', ') : (lead.phone || ''),
-      services: Array.isArray(lead.services) ? lead.services.join(', ') : (lead.services || ''),
-      summary: lead.needsDescription || '',
-      conversation: (fullConversation || lead.fullConversation || conversationSummary || '').substring(0, 5000),
-    };
-
-    // Check if there's any useful data (name OR contact info)
-    if (!leadData.name && !leadData.email && !leadData.phone) {
+    if (!name && !email && !phone) {
       return res.status(200).json({
         success: false,
         message: 'No contact information to save'
       });
     }
 
-    // Upsert to Google Sheets (update if exists, append if new)
-    await upsertToSheet(leadData);
+    // Parse conversation into messages array
+    const messages = [];
+    if (conversation) {
+      const parts = conversation.split('\n\n');
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('Customer:')) {
+          messages.push({ role: 'user', text: trimmed.slice(9).trim() });
+        } else if (trimmed.startsWith('DriveBot:')) {
+          messages.push({ role: 'assistant', text: trimmed.slice(9).trim() });
+        } else {
+          messages.push({ role: 'user', text: trimmed });
+        }
+      }
+    }
+
+    // POST to WVDI Admin API
+    const payload = {
+      source: 'web',
+      thread_id: sessionId,
+      name,
+      email: email || undefined,
+      phone: phone || undefined,
+      services: services || undefined,
+      summary: summary || undefined,
+      messages,
+    };
+
+    if (!ADMIN_API_KEY) {
+      console.error('CHATBOT_API_KEY not configured');
+      return res.status(500).json({ error: 'API key not configured' });
+    }
+
+    const response = await fetch(ADMIN_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': ADMIN_API_KEY,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error('WVDI Admin API error:', result);
+      return res.status(500).json({
+        error: 'Failed to save lead',
+        details: result.error || 'Unknown error',
+      });
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Lead saved successfully',
       version: API_VERSION,
-      threadId: leadData.threadId,
+      threadId: sessionId,
+      contact_id: result.contact_id,
+      matched: result.matched,
     });
 
   } catch (error) {
     console.error('Error saving lead:', error);
-
-    // Check if it's a configuration error
-    if (error.message.includes('credentials not configured')) {
-      return res.status(500).json({
-        error: 'Google Sheets not configured',
-        details: 'Service account credentials are missing',
-      });
-    }
-
     return res.status(500).json({
       error: 'Failed to save lead',
       details: error.message,
