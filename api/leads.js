@@ -63,16 +63,24 @@ export default async function handler(req, res) {
     // Parse conversation into messages array
     const messages = [];
     if (conversation) {
+      let lastRole = 'assistant';
       const parts = conversation.split('\n\n');
       for (const part of parts) {
         const trimmed = part.trim();
         if (!trimmed) continue;
         if (trimmed.startsWith('Customer:')) {
+          lastRole = 'user';
           messages.push({ role: 'user', text: trimmed.slice(9).trim() });
         } else if (trimmed.startsWith('DriveBot:')) {
+          lastRole = 'assistant';
           messages.push({ role: 'assistant', text: trimmed.slice(9).trim() });
         } else {
-          messages.push({ role: 'user', text: trimmed });
+          // Continuation of the previous message — append to it
+          if (messages.length > 0) {
+            messages[messages.length - 1].text += '\n\n' + trimmed;
+          } else {
+            messages.push({ role: lastRole, text: trimmed });
+          }
         }
       }
     }
