@@ -53,13 +53,7 @@ export default async function handler(req, res) {
     const summary = lead.needsDescription || '';
     const conversation = (fullConversation || lead.fullConversation || conversationSummary || '').substring(0, 50000);
 
-    if (!name && !email && !phone) {
-      return res.status(200).json({
-        success: false,
-        message: 'No contact information to save'
-      });
-    }
-
+    // Always save — contact info gets extracted progressively
     // Parse conversation into messages array
     const messages = [];
     if (conversation) {
