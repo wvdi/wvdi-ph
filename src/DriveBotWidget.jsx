@@ -152,36 +152,44 @@ export default function DriveBotWidget() {
     };
   }, [sessionId, leadCaptured, leadData]);
 
-  const saveLead = async () => {
-    // Save if we have a session and more than just the initial bot message
-    if (!sessionId || messages.length <= 1) return;
-
+  const saveLeadWithMessages = async (msgs, lead) => {
+    if (!sessionId || !msgs || msgs.length <= 1) return;
     try {
-      // Full conversation transcript
+      const fullConversation = msgs
+        .map(m => `${m.role === 'user' ? 'Customer' : 'DriveBot'}: ${m.content}`)
+        .join('\n\n');
+
+      const leadInfo = lead || leadData || {
+        phones: [], emails: [], name: null, services: [],
+        preferredBranch: null, needsDescription: null,
+      };
+
+      await fetch(LEADS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, lead: leadInfo, fullConversation }),
+      });
+    } catch (error) {
+      console.error('Error saving lead:', error);
+    }
+  };
+
+  const saveLead = async () => {
+    if (!sessionId || messages.length <= 1) return;
+    try {
       const fullConversation = messages
         .map(m => `${m.role === 'user' ? 'Customer' : 'DriveBot'}: ${m.content}`)
         .join('\n\n');
 
-      // Use leadData if available, otherwise create empty lead structure
       const lead = leadData || {
-        phones: [],
-        emails: [],
-        name: null,
-        services: [],
-        preferredBranch: null,
-        needsDescription: null,
+        phones: [], emails: [], name: null, services: [],
+        preferredBranch: null, needsDescription: null,
       };
-
-      console.log('Saving lead:', { sessionId, lead, messageCount: messages.length });
 
       const response = await fetch(LEADS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          lead,
-          fullConversation,
-        }),
+        body: JSON.stringify({ sessionId, lead, fullConversation }),
       });
 
       const result = await response.json();
@@ -233,10 +241,16 @@ export default function DriveBotWidget() {
           setCurrentProvider(data.provider);
         }
 
-        setMessages(prev => [...prev, {
+        const botMessage = {
           role: 'assistant',
           content: data.response || "I'm sorry, I couldn't process that. Please try again."
-        }]);
+        };
+        setMessages(prev => [...prev, botMessage]);
+
+        // Auto-save after every bot response so conversation is always current
+        // Build the full message list including this latest exchange
+        const allMessages = [...messages, userMessage, botMessage];
+        saveLeadWithMessages(allMessages, data.lead || leadData);
       } else {
         setMessages(prev => [...prev, {
           role: 'assistant',
