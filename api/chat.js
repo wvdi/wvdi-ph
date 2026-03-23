@@ -161,6 +161,9 @@ export default async function handler(req, res) {
       responseText = rawResponse;
     }
 
+    // Final safety: strip any remaining <think> tags
+    responseText = responseText.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
+
     // Store messages in session for context
     session.messages = messages.slice(-30); // Keep last 30 messages
 

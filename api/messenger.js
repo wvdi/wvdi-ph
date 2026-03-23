@@ -250,7 +250,8 @@ async function processMessage(senderId, messageText) {
     let aiExtractedLead = null;
 
     try {
-      let jsonStr = rawResponse.trim();
+      // Strip <think>...</think> reasoning tags (MiniMax M2.7 chain-of-thought)
+      let jsonStr = rawResponse.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
       if (jsonStr.startsWith('```')) {
         jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
       }
@@ -292,6 +293,9 @@ async function processMessage(senderId, messageText) {
         .replace(/\\n/g, '\n')
         .replace(/\\"/g, '"');
     }
+
+    // Final safety: strip any remaining <think> tags from responseText
+    responseText = responseText.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
 
     // Add assistant message to history
     conversation.messages.push({
